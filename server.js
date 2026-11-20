@@ -2,8 +2,9 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { parsePdfBuffer, parseAnswerKeyText } = require('./parser');
+const { parsePdfBuffer, parseAnswerKeyText, parseQuestionsFromText } = require('./parser');
 const { generateCbtHtml } = require('./template');
+const { geminiRotator } = require('./geminiRotator');
 
 const cors = require('cors');
 const app = express();
@@ -64,22 +65,68 @@ app.post('/api/parse-pdf', upload.fields([
     let parsedResult = null;
     const defaultSubject = req.body.defaultSubject || 'Physics';
 
-    if (req.files && req.files.paperPdf && req.files.paperPdf[0]) {
-      const buffer = req.files.paperPdf[0].buffer;
-      parsedResult = await parsePdfBuffer(buffer, defaultSubject);
-    } else if (rawText.trim()) {
-      const { parseQuestionsFromText } = require('./parser');
-      const res = parseQuestionsFromText(rawText, defaultSubject);
+    // 1. Obtain raw text from buffer if file uploaded without client text
+    if (req.files && req.files.paperPdf && req.files.paperPdf[0] && !rawText.trim()) {
+      const pdfParseLib = require('pdf-parse/lib/pdf-parse.js');
+      const data = await pdfParseLib(req.files.paperPdf[0].buffer);
+      rawText = data.text;
+    }
+
+    if (!rawText.trim()) {
+      return res.status(400).json({ error: 'Please upload a PDF file or paste text content' });
+    }
+
+    // 2. Attempt intelligent extraction using Gemini Rotator
+    try {
+      const clientKeysRaw = req.headers['x-gemini-keys'] || req.body.geminiKeys || '';
+      const customKeys = clientKeysRaw
+        ? clientKeysRaw.split(/[,;\n]+/).map(k => k.trim()).filter(k => k.length > 5)
+        : [];
+
+      const aiData = await geminiRotator.parseExamPaper(rawText, defaultSubject, customKeys);
+      if (aiData && aiData.questions && aiData.questions.length > 0) {
+        const formattedQuestions = aiData.questions.map((q, idx) => ({
+          qid: `QID_${q.num || idx + 1}_${Date.now().toString(36)}`,
+          num: q.num || idx + 1,
+          subject: q.subject || defaultSubject,
+          section: q.section || (q.type === 'Numerical' ? 'Section B' : 'Section A'),
+          type: q.type || 'MCQ',
+          text: q.text || `Question ${q.num || idx + 1}`,
+          options: q.options && q.options.length === 4 ? q.options : (q.type === 'MCQ' ? ['Option 1', 'Option 2', 'Option 3', 'Option 4'] : []),
+          answer: q.answer ? String(q.answer) : '',
+          hasDiagram: !!q.hasDiagram,
+          qImg: ''
+        }));
+
+        const detectedAnswers = formattedQuestions.filter(q => q.answer).length;
+        const subjects = aiData.subjects && aiData.subjects.length > 0 ? aiData.subjects : [defaultSubject];
+
+        parsedResult = {
+          numpages: 1,
+          rawText,
+          subjects,
+          questions: formattedQuestions,
+          totalCount: formattedQuestions.length,
+          detectedAnswersCount: detectedAnswers,
+          engine: 'Gemini-3.5-Rotator'
+        };
+      }
+    } catch (aiErr) {
+      console.warn('[GeminiRotator] AI extraction failed or throttled. Falling back to offline parser:', aiErr.message);
+    }
+
+    // 3. Fallback to deterministic regex parser if Gemini was unavailable
+    if (!parsedResult) {
+      const fallback = parseQuestionsFromText(rawText, defaultSubject);
       parsedResult = {
         numpages: 1,
         rawText,
         subjects: [defaultSubject],
-        questions: res.questions,
-        totalCount: res.totalCount,
-        detectedAnswersCount: res.detectedAnswersCount
+        questions: fallback.questions,
+        totalCount: fallback.totalCount,
+        detectedAnswersCount: fallback.detectedAnswersCount,
+        engine: 'Deterministic-Offline'
       };
-    } else {
-      return res.status(400).json({ error: 'Please upload a PDF file or paste text content' });
     }
 
     // If an answer key PDF or text was uploaded separately

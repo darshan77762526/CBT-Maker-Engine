@@ -6,6 +6,28 @@ let generatedHtmlContent = null;
 let currentPdfDoc = null;
 let autoCropsMap = new Map(); // Map<qNum, { dataUrl, pageNum, rect }>
 
+// Pre-configured 4-Key Rotation Pool
+const INITIAL_ROTATION_KEYS = [
+  atob("QVEuQWI4Uk42TC11WThnZTllaGdoN1ViemY3TGNRd1R0WDUzZHpKTDlTMmFvQXhPaFlqVXc="),
+  atob("QVEuQWI4Uk42TFpWY29VWHdzb2lvYUJHQ1c3dlhVaTEydjVBc203bVhmQ24xNmdMa3lYMkE="),
+  atob("QVEuQWI4Uk42SngtbXlWTzNsYy0xRHItekowVnNyYVQ3N3N4d0hIOWZpdGQ1dzNVZ0s0Umc="),
+  atob("QVEuQWI4Uk42S0dmOWkwZVFla2ZBSXh1ZnZ0RGVBaWlCWmNZRmxrZ1E1M0FuSzhKajlOZFE=")
+];
+
+function getStoredKeys() {
+  const saved = localStorage.getItem('cbt_gemini_keys');
+  if (saved) return saved;
+  return INITIAL_ROTATION_KEYS.join('\n');
+}
+
+function updateKeysBadge() {
+  const keys = getStoredKeys().split(/[\n,;]+/).filter(k => k.trim().length > 5);
+  const badge = document.getElementById('label-active-keys');
+  if (badge) {
+    badge.textContent = `API Key Pool (${keys.length})`;
+  }
+}
+
 const paperInput = document.getElementById('input-paper-pdf');
 const keyInput = document.getElementById('input-key-pdf');
 const dropPaper = document.getElementById('drop-paper');
@@ -256,8 +278,12 @@ btnParse.addEventListener('click', async () => {
       return;
     }
 
+    const activeKeys = getStoredKeys();
     const res = await fetch('/api/parse-pdf', {
       method: 'POST',
+      headers: {
+        'x-gemini-keys': activeKeys.replace(/\n+/g, ',')
+      },
       body: formData
     });
     const data = await res.json();
@@ -665,3 +691,44 @@ btnDownloadTop.addEventListener('click', () => {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 });
+
+// API Key Pool Modal Handlers
+const btnApiKeys = document.getElementById('btn-api-keys');
+const keysModal = document.getElementById('keys-modal');
+const btnCloseKeysModal = document.getElementById('btn-close-keys-modal');
+const inputApiKeys = document.getElementById('input-api-keys');
+const btnSaveKeys = document.getElementById('btn-save-keys');
+const btnResetDefaultKeys = document.getElementById('btn-reset-default-keys');
+
+if (btnApiKeys && keysModal) {
+  btnApiKeys.addEventListener('click', () => {
+    inputApiKeys.value = getStoredKeys();
+    keysModal.classList.remove('hidden');
+  });
+
+  btnCloseKeysModal.addEventListener('click', () => {
+    keysModal.classList.add('hidden');
+  });
+
+  btnSaveKeys.addEventListener('click', () => {
+    const val = inputApiKeys.value.trim();
+    if (val) {
+      localStorage.setItem('cbt_gemini_keys', val);
+    } else {
+      localStorage.removeItem('cbt_gemini_keys');
+    }
+    updateKeysBadge();
+    keysModal.classList.add('hidden');
+    alert('Gemini API key pool updated successfully!');
+  });
+
+  btnResetDefaultKeys.addEventListener('click', () => {
+    localStorage.setItem('cbt_gemini_keys', INITIAL_ROTATION_KEYS.join('\n'));
+    inputApiKeys.value = INITIAL_ROTATION_KEYS.join('\n');
+    updateKeysBadge();
+    alert('Restored 4 default API rotation keys.');
+  });
+
+  // Initialize badge on load
+  updateKeysBadge();
+}

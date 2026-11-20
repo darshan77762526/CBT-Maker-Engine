@@ -27,13 +27,17 @@
         <div>
           <div class="flex items-center gap-2">
             <h1 class="text-base font-extrabold tracking-tight text-white">CBT Maker Studio</h1>
-            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Offline / No-AI</span>
+            <span class="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center gap-1.5"><i class="fa-solid fa-sparkles text-amber-400"></i> 4x Gemini Rotator + Vision</span>
           </div>
           <p class="text-xs text-slate-400">Autonomous PDF to National Testing CBT Engine Compiler</p>
         </div>
       </div>
 
       <div class="flex items-center gap-3">
+        <button id="btn-api-keys" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold text-xs border border-slate-700 transition flex items-center gap-1.5 cursor-pointer">
+          <i class="fa-solid fa-key"></i>
+          <span id="label-active-keys">API Key Pool (4)</span>
+        </button>
         <button id="btn-preview-top" class="hidden px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-slate-700 transition flex items-center gap-2">
           <i class="fa-solid fa-play text-sky-400"></i>
           <span>Live Test Run</span>
@@ -221,6 +225,37 @@
             <span>Attach Cropped Diagram</span>
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gemini API Keys Configuration Modal -->
+  <div id="keys-modal" class="hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 border border-sky-500/30 flex items-center justify-center font-bold text-sm">
+            <i class="fa-solid fa-key"></i>
+          </div>
+          <div>
+            <h3 class="text-sm font-bold text-white">Gemini API Key Pool (Rotation)</h3>
+            <p class="text-[11px] text-slate-400">Rotates across multiple keys to bypass rate limits</p>
+          </div>
+        </div>
+        <button id="btn-close-keys-modal" class="text-slate-400 hover:text-white text-lg">&times;</button>
+      </div>
+
+      <div class="space-y-2">
+        <label class="block text-xs font-bold text-slate-300">Enter Gemini API Keys (one per line or comma-separated):</label>
+        <textarea id="input-api-keys" rows="5" placeholder="Enter Gemini API keys (one per line)..." class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs text-emerald-400 font-mono focus:outline-none focus:border-sky-500"></textarea>
+        <p class="text-[11px] text-slate-500">Keys are saved locally in your browser and rotated round-robin with automatic 429 failover.</p>
+      </div>
+
+      <div class="flex items-center justify-between pt-2 border-t border-slate-800">
+        <button id="btn-reset-default-keys" class="text-xs text-sky-400 hover:underline">Restore 4 Pre-Configured Keys</button>
+        <button id="btn-save-keys" class="px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs shadow-lg shadow-sky-600/30 transition">
+          Save Key Pool
+        </button>
       </div>
     </div>
   </div>
