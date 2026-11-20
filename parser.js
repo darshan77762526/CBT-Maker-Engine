@@ -2,7 +2,12 @@
  * Non-AI Deterministic PDF Question Paper & Answer Key Parser
  * Extracts structured questions, sections, types, options, and answers from text streams
  */
-const pdfParse = require('pdf-parse');
+let pdfParse;
+try {
+  pdfParse = require('pdf-parse/lib/pdf-parse.js');
+} catch (e) {
+  pdfParse = require('pdf-parse');
+}
 
 const COMMON_SUBJECTS = ['Physics', 'Chemistry', 'Mathematics', 'Biology', 'General Knowledge', 'Aptitude'];
 

@@ -13,18 +13,34 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-const publicDir = fs.existsSync(path.join(__dirname, 'public'))
-  ? path.join(__dirname, 'public')
-  : path.join(process.cwd(), 'public');
-
-app.use(express.static(publicDir));
+function findStaticFile(relPath) {
+  const candidates = [
+    path.join(__dirname, 'public', relPath),
+    path.join(__dirname, '..', 'public', relPath),
+    path.join(process.cwd(), 'public', relPath)
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
 
 app.get('/', (req, res) => {
-  const file = path.join(publicDir, 'index.html');
-  if (fs.existsSync(file)) {
-    return res.sendFile(file);
+  const file = findStaticFile('index.html');
+  if (file) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(fs.readFileSync(file, 'utf8'));
   }
-  return res.status(200).send('CBT Maker Studio Running');
+  return res.status(200).send('<h3>CBT Maker Studio Running</h3>');
+});
+
+app.get('/app.js', (req, res) => {
+  const file = findStaticFile('app.js');
+  if (file) {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    return res.send(fs.readFileSync(file, 'utf8'));
+  }
+  return res.status(404).send('Not found');
 });
 
 const upload = multer({
@@ -70,7 +86,8 @@ app.post('/api/parse-pdf', upload.fields([
     let extraAnswers = new Map();
     if (req.files && req.files.keyPdf && req.files.keyPdf[0]) {
       const keyBuffer = req.files.keyPdf[0].buffer;
-      const keyPdfData = await require('pdf-parse')(keyBuffer);
+      const pdfParseLib = require('pdf-parse/lib/pdf-parse.js');
+      const keyPdfData = await pdfParseLib(keyBuffer);
       extraAnswers = parseAnswerKeyText(keyPdfData.text);
     } else if (req.body.answerKeyText) {
       extraAnswers = parseAnswerKeyText(req.body.answerKeyText);
