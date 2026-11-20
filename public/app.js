@@ -41,31 +41,68 @@ btnToggleRaw.addEventListener('click', () => {
   rawTextPanel.classList.toggle('hidden');
 });
 
+// Client-side PDF text extraction helper
+async function extractTextFromPdf(file) {
+  if (typeof pdfjsLib === 'undefined' || !file) return null;
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map(item => item.str).join(' ');
+      fullText += '\n' + pageText;
+    }
+    return fullText;
+  } catch (e) {
+    console.warn('Client-side PDF extract fallback:', e);
+    return null;
+  }
+}
+
 // Trigger Parsing
 btnParse.addEventListener('click', async () => {
   const formData = new FormData();
   const defaultSubj = document.getElementById('default-subject-select').value;
   formData.append('defaultSubject', defaultSubj);
 
-  if (paperInput.files[0]) {
-    formData.append('paperPdf', paperInput.files[0]);
-  }
-  if (keyInput.files[0]) {
-    formData.append('keyPdf', keyInput.files[0]);
-  }
-  if (rawTextInput.value.trim()) {
-    formData.append('rawText', rawTextInput.value.trim());
-  }
-
-  if (!paperInput.files[0] && !rawTextInput.value.trim()) {
-    alert('Please select a PDF file or paste text content first');
-    return;
-  }
-
   btnParse.disabled = true;
-  btnParse.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>Parsing PDF &amp; Extracting Questions...</span>`;
+  btnParse.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>Extracting Questions...</span>`;
 
   try {
+    // Attempt client-side PDF text extraction first for maximum speed & reliability
+    let extractedPaperText = '';
+    if (paperInput.files[0]) {
+      extractedPaperText = await extractTextFromPdf(paperInput.files[0]);
+      if (extractedPaperText) {
+        formData.append('rawText', extractedPaperText);
+      } else {
+        formData.append('paperPdf', paperInput.files[0]);
+      }
+    }
+
+    if (keyInput.files[0]) {
+      const extractedKeyText = await extractTextFromPdf(keyInput.files[0]);
+      if (extractedKeyText) {
+        formData.append('answerKeyText', extractedKeyText);
+      } else {
+        formData.append('keyPdf', keyInput.files[0]);
+      }
+    }
+
+    if (!extractedPaperText && rawTextInput.value.trim()) {
+      formData.append('rawText', rawTextInput.value.trim());
+    }
+
+    if (!paperInput.files[0] && !rawTextInput.value.trim()) {
+      alert('Please select a PDF file or paste text content first');
+      btnParse.disabled = false;
+      btnParse.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles"></i><span>Parse &amp; Extract CBT Questions</span>`;
+      return;
+    }
+
     const res = await fetch('/api/parse-pdf', {
       method: 'POST',
       body: formData

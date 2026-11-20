@@ -5,9 +5,11 @@ const fs = require('fs');
 const { parsePdfBuffer, parseAnswerKeyText } = require('./parser');
 const { generateCbtHtml } = require('./template');
 
+const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 5050;
 
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
