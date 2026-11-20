@@ -211,6 +211,9 @@ function generateCbtHtml(config) {
         <div class="p-5 sm:p-6 flex-1 space-y-5">
           <div id="q-text-container" class="text-base text-slate-800 leading-relaxed font-medium"></div>
 
+          <!-- Question Diagram / Figure Container -->
+          <div id="q-diagram-container" class="hidden"></div>
+
           <!-- MCQ Options Container -->
           <div id="mcq-options-container" class="space-y-3 pt-2"></div>
 
@@ -395,6 +398,24 @@ function generateCbtHtml(config) {
       document.getElementById('q-id-label').textContent = \`QID: \${q.qid}\`;
       document.getElementById('q-text-container').innerHTML = q.text || \`Question \${q.num}\`;
 
+      // Render Question Diagram / Image if present
+      const diagramBox = document.getElementById('q-diagram-container');
+      if (q.qImg && q.qImg.trim()) {
+        diagramBox.innerHTML = \`
+          <div class="my-3 bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
+            <img src="\${q.qImg}" alt="Question Figure / Diagram" class="max-w-full max-h-[420px] mx-auto rounded-lg object-contain cursor-zoom-in shadow-sm hover:opacity-95 transition" onclick="zoomDiagram('\${q.qImg.replace(/'/g, "\\\\'")}')" />
+            <div class="text-[11px] text-slate-500 font-medium mt-2 flex items-center justify-center gap-1">
+              <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"></path></svg>
+              <span>Click diagram to view full size</span>
+            </div>
+          </div>
+        \`;
+        diagramBox.classList.remove('hidden');
+      } else {
+        diagramBox.innerHTML = '';
+        diagramBox.classList.add('hidden');
+      }
+
       const mcqBox = document.getElementById('mcq-options-container');
       const numBox = document.getElementById('numerical-container');
 
@@ -474,6 +495,7 @@ function generateCbtHtml(config) {
               <span class="text-xs font-bold px-2.5 py-0.5 rounded-full \${isCorrect ? 'bg-emerald-100 text-emerald-800' : userResp ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-600'}">\${statusText}</span>
             </div>
             <div class="text-sm text-slate-800 font-medium">\${q.text}</div>
+            \${q.qImg ? \`<div class="my-2.5 text-center bg-slate-50 border border-slate-200 rounded-lg p-2"><img src="\${q.qImg}" alt="Question Figure" class="max-w-full max-h-56 mx-auto rounded object-contain cursor-zoom-in" onclick="zoomDiagram('\${q.qImg.replace(/'/g, "\\\\'")}')" /></div>\` : ''}
             <div class="pt-2 border-t border-slate-100 flex flex-wrap gap-4 text-xs font-mono">
               <div>Your Answer: <strong class="\${isCorrect ? 'text-emerald-700' : userResp ? 'text-red-600' : 'text-slate-400'}">\${userResp || 'None'}</strong></div>
               <div>Official Answer Key: <strong class="text-emerald-700">\${official || 'Pending'}</strong></div>
@@ -602,7 +624,31 @@ function generateCbtHtml(config) {
         }
       });
     });
+
+    // Diagram Zoom Handlers
+    window.zoomDiagram = function(src) {
+      const modal = document.getElementById('diagram-zoom-modal');
+      const img = document.getElementById('diagram-zoom-img');
+      if (modal && img) {
+        img.src = src;
+        modal.classList.remove('hidden');
+      }
+    };
+    window.closeDiagramZoom = function() {
+      const modal = document.getElementById('diagram-zoom-modal');
+      if (modal) modal.classList.add('hidden');
+    };
   </script>
+
+  <!-- Diagram Zoom Overlay Modal -->
+  <div id="diagram-zoom-modal" class="hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4" onclick="closeDiagramZoom()">
+    <div class="relative max-w-5xl max-h-[92vh] flex flex-col items-center" onclick="event.stopPropagation()">
+      <button type="button" onclick="closeDiagramZoom()" class="absolute -top-10 right-0 text-white hover:text-red-400 font-bold text-xs flex items-center gap-1.5 bg-white/10 hover:bg-white/20 px-3 py-1 rounded-full cursor-pointer transition">
+        <span>Close</span> &times;
+      </button>
+      <img id="diagram-zoom-img" src="" alt="Enlarged Diagram" class="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl bg-white border border-slate-700 p-2" />
+    </div>
+  </div>
 </body>
 </html>`;
 }

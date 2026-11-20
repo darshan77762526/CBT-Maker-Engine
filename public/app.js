@@ -1,7 +1,10 @@
 // CBT Maker Studio Client Application
+// High-Fidelity 2D PDF Text & Visual Question Diagram Slicing Engine
 let currentQuestions = [];
 let currentSubjects = [];
 let generatedHtmlContent = null;
+let currentPdfDoc = null;
+let autoCropsMap = new Map(); // Map<qNum, { dataUrl, pageNum, rect }>
 
 const paperInput = document.getElementById('input-paper-pdf');
 const keyInput = document.getElementById('input-key-pdf');
@@ -22,6 +25,27 @@ const btnPreviewTop = document.getElementById('btn-preview-top');
 const btnDownloadTop = document.getElementById('btn-download-top');
 const btnAddQuestion = document.getElementById('btn-add-question');
 
+// Cropper Modal Elements
+const cropperModal = document.getElementById('cropper-modal');
+const cropperCanvas = document.getElementById('cropper-canvas');
+const cropperBox = document.getElementById('cropper-selection-box');
+const cropperCanvasContainer = document.getElementById('cropper-canvas-container');
+const cropperModalTitle = document.getElementById('cropper-modal-title');
+const cropperPageNumLabel = document.getElementById('cropper-page-num');
+const cropperPrevPageBtn = document.getElementById('cropper-prev-page');
+const cropperNextPageBtn = document.getElementById('cropper-next-page');
+const cropperCancelBtn = document.getElementById('cropper-btn-cancel');
+const cropperResetBtn = document.getElementById('cropper-btn-reset-box');
+const cropperApplyBtn = document.getElementById('cropper-btn-apply');
+
+let activeCropQIdx = null;
+let cropperCurrentPage = 1;
+let cropperTotalPages = 1;
+let isDraggingSelection = false;
+let selStartX = 0;
+let selStartY = 0;
+let selRect = null; // { x, y, width, height } in canvas pixels
+
 // Drag & drop handlers
 dropPaper.addEventListener('click', () => paperInput.click());
 paperInput.addEventListener('change', () => {
@@ -41,25 +65,146 @@ btnToggleRaw.addEventListener('click', () => {
   rawTextPanel.classList.toggle('hidden');
 });
 
-// Client-side PDF text extraction helper
-async function extractTextFromPdf(file) {
-  if (typeof pdfjsLib === 'undefined' || !file) return null;
-  try {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map(item => item.str).join(' ');
-      fullText += '\n' + pageText;
+/**
+ * Filter coaching watermarks and repeated header/footer noise
+ */
+function cleanWatermarks(text) {
+  if (!text) return '';
+  return text
+    .replace(/^[^\n]*(?:DOWNLOAD\s+[^\n]*APP\s+NOW|IIT\s+SCHOOL|ALLEN|FIITJEE|PHYSICS\s*WALLAH|UNACADEMY|RESONANCE)[^\n]*$/gmi, '')
+    .replace(/^[^\n]*(?:Page\s*\d+\s*(?:of|\/)\s*\d+|DPP\s*[-–]\s*\d+)[^\n]*$/gmi, '')
+    .replace(/^[A-Z\s]{4,}\s*\(\s*[A-Za-z\s]+\s*\)\s*\d+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * Reconstruct text lines from PDF.js items using 2D coordinates (Y top-to-bottom, X left-to-right)
+ */
+function reconstructTextLinesFromItems(items) {
+  if (!items || items.length === 0) return { text: '', linePositions: [] };
+
+  // Sort descending by Y (higher Y is higher up in PDF coordinate space), then ascending by X
+  const sorted = items.slice().sort((a, b) => {
+    const yDiff = b.transform[5] - a.transform[5];
+    if (Math.abs(yDiff) > 3.5) return yDiff;
+    return a.transform[4] - b.transform[4];
+  });
+
+  const lines = [];
+  const linePositions = [];
+  let currentLine = [];
+  let currentY = null;
+  let currentMinX = null;
+
+  for (const item of sorted) {
+    if (!item.str || !item.str.trim()) continue;
+    const itemY = item.transform[5];
+    const itemX = item.transform[4];
+
+    if (currentY === null) {
+      currentY = itemY;
+      currentMinX = itemX;
+      currentLine.push(item.str);
+    } else if (Math.abs(itemY - currentY) <= 4.0) {
+      currentLine.push(item.str);
+    } else {
+      const lineStr = currentLine.join(' ');
+      lines.push(lineStr);
+      linePositions.push({ text: lineStr, pdfY: currentY, pdfX: currentMinX });
+      currentLine = [item.str];
+      currentY = itemY;
+      currentMinX = itemX;
     }
-    return fullText;
-  } catch (e) {
-    console.warn('Client-side PDF extract fallback:', e);
-    return null;
   }
+
+  if (currentLine.length > 0) {
+    const lineStr = currentLine.join(' ');
+    lines.push(lineStr);
+    linePositions.push({ text: lineStr, pdfY: currentY, pdfX: currentMinX });
+  }
+
+  return {
+    text: lines.join('\n'),
+    linePositions
+  };
+}
+
+/**
+ * Process PDF: Renders pages, extracts 2D-sorted text, detects question anchors,
+ * and automatically slices visual question cards (including diagrams).
+ */
+async function processPdfWithVisualSlices(file) {
+  if (typeof pdfjsLib === 'undefined' || !file) return null;
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  currentPdfDoc = pdf;
+  autoCropsMap.clear();
+
+  let completeText = '';
+  const questionAnchorPattern = /(?:^|\n|\s{3,})(?:(?:Q(?:uestion)?\.?\s*)(\d{1,3})|(\d{1,3}))[\.\)\:\-]\s+/gi;
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const scale = 1.6; // High DPI for crisp diagram rendering
+    const viewport = page.getViewport({ scale });
+
+    // Render page to offscreen canvas
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    // Extract text items and reconstruct 2D lines
+    const textContent = await page.getTextContent();
+    const { text: pageText, linePositions } = reconstructTextLinesFromItems(textContent.items);
+    completeText += '\n' + pageText;
+
+    // Detect question anchors on this page to calculate visual bounding boxes
+    const detectedOnPage = [];
+    for (const lp of linePositions) {
+      questionAnchorPattern.lastIndex = 0;
+      const match = questionAnchorPattern.exec(lp.text);
+      if (match) {
+        const qNum = parseInt(match[1] || match[2], 10);
+        if (qNum > 0 && qNum <= 300) {
+          // Convert PDF Y to Canvas Screen Y
+          const canvasY = Math.max(0, viewport.height - (lp.pdfY * scale));
+          detectedOnPage.push({ qNum, canvasY });
+        }
+      }
+    }
+
+    // Sort detected questions by canvas Y
+    detectedOnPage.sort((a, b) => a.canvasY - b.canvasY);
+
+    // Slice each question box from the canvas
+    for (let i = 0; i < detectedOnPage.length; i++) {
+      const cur = detectedOnPage[i];
+      const next = detectedOnPage[i + 1];
+      const startY = Math.max(0, cur.canvasY - 12);
+      const endY = next ? Math.min(canvas.height, next.canvasY - 12) : Math.min(canvas.height, startY + 450);
+      const sliceH = Math.max(80, endY - startY);
+
+      const sliceCanvas = document.createElement('canvas');
+      sliceCanvas.width = canvas.width;
+      sliceCanvas.height = sliceH;
+      const sCtx = sliceCanvas.getContext('2d');
+      sCtx.drawImage(canvas, 0, startY, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+
+      const qImgData = sliceCanvas.toDataURL('image/jpeg', 0.85);
+      autoCropsMap.set(cur.qNum, {
+        dataUrl: qImgData,
+        pageNum,
+        startY,
+        sliceH
+      });
+    }
+  }
+
+  return cleanWatermarks(completeText);
 }
 
 // Trigger Parsing
@@ -69,13 +214,12 @@ btnParse.addEventListener('click', async () => {
   formData.append('defaultSubject', defaultSubj);
 
   btnParse.disabled = true;
-  btnParse.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>Extracting Questions...</span>`;
+  btnParse.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>Analyzing &amp; Cropping Diagrams...</span>`;
 
   try {
-    // Attempt client-side PDF text extraction first for maximum speed & reliability
     let extractedPaperText = '';
     if (paperInput.files[0]) {
-      extractedPaperText = await extractTextFromPdf(paperInput.files[0]);
+      extractedPaperText = await processPdfWithVisualSlices(paperInput.files[0]);
       if (extractedPaperText) {
         formData.append('rawText', extractedPaperText);
       } else {
@@ -84,8 +228,17 @@ btnParse.addEventListener('click', async () => {
     }
 
     if (keyInput.files[0]) {
-      const extractedKeyText = await extractTextFromPdf(keyInput.files[0]);
-      if (extractedKeyText) {
+      let extractedKeyText = '';
+      try {
+        const keyPdf = await pdfjsLib.getDocument({ data: await keyInput.files[0].arrayBuffer() }).promise;
+        for (let i = 1; i <= keyPdf.numPages; i++) {
+          const p = await keyPdf.getPage(i);
+          const tc = await p.getTextContent();
+          extractedKeyText += '\n' + tc.items.map(it => it.str).join(' ');
+        }
+      } catch (e) {}
+
+      if (extractedKeyText.trim()) {
         formData.append('answerKeyText', extractedKeyText);
       } else {
         formData.append('keyPdf', keyInput.files[0]);
@@ -113,6 +266,13 @@ btnParse.addEventListener('click', async () => {
     currentQuestions = data.questions || [];
     currentSubjects = data.stats.subjects || [defaultSubj];
 
+    // Associate auto-cropped visual diagrams (circuits, formulas, figures)
+    for (const q of currentQuestions) {
+      if (autoCropsMap.has(q.num)) {
+        q.qImg = autoCropsMap.get(q.num).dataUrl;
+      }
+    }
+
     document.getElementById('stat-q-count').innerText = data.stats.totalQuestions;
     document.getElementById('stat-k-count').innerText = data.stats.detectedAnswers;
     document.getElementById('badge-total-extracted').innerText = `${data.stats.totalQuestions} Questions`;
@@ -130,7 +290,7 @@ btnParse.addEventListener('click', async () => {
   }
 });
 
-// Render question cards with inline editing
+// Render question cards with diagram preview and inline editing
 function renderQuestions() {
   questionsList.innerHTML = currentQuestions.map((q, idx) => {
     const isMcq = q.type === 'MCQ';
@@ -163,6 +323,47 @@ function renderQuestions() {
       `;
     }
 
+    // Diagram section
+    let diagramMarkup = '';
+    if (q.qImg && q.qImg.trim()) {
+      diagramMarkup = `
+        <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <img src="${q.qImg}" alt="Question Diagram" class="max-h-24 max-w-xs rounded border border-slate-700 bg-white p-1 object-contain" />
+            <div class="space-y-1">
+              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <i class="fa-solid fa-image text-sky-400"></i> Diagram Attached
+              </span>
+              <p class="text-[11px] text-slate-500">Includes circuit / diagram / formulas from PDF</p>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="openCropperModal(${idx})" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition flex items-center gap-1">
+              <i class="fa-solid fa-crop-simple text-sky-400"></i>
+              <span>Re-crop</span>
+            </button>
+            <button type="button" onclick="removeQuestionDiagram(${idx})" class="px-2.5 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/30 transition">
+              <i class="fa-solid fa-trash mr-1"></i> Remove
+            </button>
+          </div>
+        </div>
+      `;
+    } else {
+      diagramMarkup = `
+        <div class="flex items-center gap-2 pt-1">
+          <button type="button" onclick="openCropperModal(${idx})" class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-semibold transition flex items-center gap-1.5">
+            <i class="fa-solid fa-crop-simple text-sky-400"></i>
+            <span>Crop Diagram from PDF</span>
+          </button>
+          <label class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer">
+            <i class="fa-solid fa-upload text-emerald-400"></i>
+            <span>Upload Image</span>
+            <input type="file" accept="image/*" class="hidden" onchange="uploadCustomDiagram(${idx}, this)" />
+          </label>
+        </div>
+      `;
+    }
+
     return `
       <div class="bg-slate-950/70 border border-slate-800 rounded-2xl p-5 space-y-3 transition hover:border-slate-700">
         <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
@@ -188,6 +389,8 @@ function renderQuestions() {
         <div>
           <textarea rows="2" onchange="updateQuestionField(${idx}, 'text', this.value)" class="w-full bg-slate-900/80 border border-slate-800 focus:border-sky-500 rounded-xl p-3 text-xs text-slate-200 focus:outline-none" placeholder="Question statement...">${q.text || ''}</textarea>
         </div>
+
+        ${diagramMarkup}
 
         ${optionsMarkup}
       </div>
@@ -226,6 +429,24 @@ window.toggleQuestionType = function(idx) {
   }
 };
 
+window.removeQuestionDiagram = function(idx) {
+  if (currentQuestions[idx]) {
+    currentQuestions[idx].qImg = '';
+    renderQuestions();
+  }
+};
+
+window.uploadCustomDiagram = function(idx, input) {
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      currentQuestions[idx].qImg = e.target.result;
+      renderQuestions();
+    };
+    reader.readAsDataURL(input.files[0]);
+  }
+};
+
 window.deleteQuestion = function(idx) {
   if (confirm(`Delete Question ${currentQuestions[idx]?.num}?`)) {
     currentQuestions.splice(idx, 1);
@@ -251,6 +472,137 @@ btnAddQuestion.addEventListener('click', () => {
   document.getElementById('badge-total-extracted').innerText = `${currentQuestions.length} Questions`;
   renderQuestions();
   window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+});
+
+// Interactive Cropper Modal Logic
+window.openCropperModal = async function(idx) {
+  activeCropQIdx = idx;
+  const q = currentQuestions[idx];
+  cropperModalTitle.textContent = `Crop Diagram for Question ${q.num} (${q.subject})`;
+
+  if (!currentPdfDoc) {
+    alert('Please upload a PDF file first to use interactive cropping.');
+    return;
+  }
+
+  // Determine initial page number
+  let targetPage = 1;
+  if (autoCropsMap.has(q.num)) {
+    targetPage = autoCropsMap.get(q.num).pageNum;
+  }
+  cropperCurrentPage = targetPage;
+  cropperTotalPages = currentPdfDoc.numPages;
+
+  cropperModal.classList.remove('hidden');
+  await renderCropperPage(cropperCurrentPage);
+};
+
+async function renderCropperPage(pageNum) {
+  if (!currentPdfDoc) return;
+  cropperPageNumLabel.textContent = `${pageNum} / ${cropperTotalPages}`;
+  cropperBox.classList.add('hidden');
+  selRect = null;
+
+  const page = await currentPdfDoc.getPage(pageNum);
+  const viewport = page.getViewport({ scale: 1.5 });
+  cropperCanvas.width = viewport.width;
+  cropperCanvas.height = viewport.height;
+  const ctx = cropperCanvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+}
+
+cropperPrevPageBtn.addEventListener('click', async () => {
+  if (cropperCurrentPage > 1) {
+    cropperCurrentPage--;
+    await renderCropperPage(cropperCurrentPage);
+  }
+});
+
+cropperNextPageBtn.addEventListener('click', async () => {
+  if (cropperCurrentPage < cropperTotalPages) {
+    cropperCurrentPage++;
+    await renderCropperPage(cropperCurrentPage);
+  }
+});
+
+cropperCancelBtn.addEventListener('click', () => {
+  cropperModal.classList.add('hidden');
+});
+
+cropperResetBtn.addEventListener('click', () => {
+  cropperBox.classList.add('hidden');
+  selRect = null;
+});
+
+// Cropper selection mouse/touch events
+cropperCanvasContainer.addEventListener('mousedown', (e) => {
+  isDraggingSelection = true;
+  const rect = cropperCanvas.getBoundingClientRect();
+  selStartX = e.clientX - rect.left;
+  selStartY = e.clientY - rect.top;
+  cropperBox.style.left = `${selStartX}px`;
+  cropperBox.style.top = `${selStartY}px`;
+  cropperBox.style.width = '0px';
+  cropperBox.style.height = '0px';
+  cropperBox.classList.remove('hidden');
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!isDraggingSelection) return;
+  const rect = cropperCanvas.getBoundingClientRect();
+  const curX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  const curY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+
+  const left = Math.min(selStartX, curX);
+  const top = Math.min(selStartY, curY);
+  const width = Math.abs(curX - selStartX);
+  const height = Math.abs(curY - selStartY);
+
+  cropperBox.style.left = `${left}px`;
+  cropperBox.style.top = `${top}px`;
+  cropperBox.style.width = `${width}px`;
+  cropperBox.style.height = `${height}px`;
+
+  // Scale relative to actual canvas resolution
+  const scaleX = cropperCanvas.width / rect.width;
+  const scaleY = cropperCanvas.height / rect.height;
+
+  selRect = {
+    x: left * scaleX,
+    y: top * scaleY,
+    width: width * scaleX,
+    height: height * scaleY
+  };
+});
+
+window.addEventListener('mouseup', () => {
+  isDraggingSelection = false;
+});
+
+cropperApplyBtn.addEventListener('click', () => {
+  if (activeCropQIdx === null || !currentQuestions[activeCropQIdx]) return;
+
+  if (!selRect || selRect.width < 10 || selRect.height < 10) {
+    alert('Please drag a selection rectangle around the diagram first.');
+    return;
+  }
+
+  const cropCanvas = document.createElement('canvas');
+  cropCanvas.width = selRect.width;
+  cropCanvas.height = selRect.height;
+  const cCtx = cropCanvas.getContext('2d');
+
+  cCtx.drawImage(
+    cropperCanvas,
+    selRect.x, selRect.y, selRect.width, selRect.height,
+    0, 0, selRect.width, selRect.height
+  );
+
+  const croppedDataUrl = cropCanvas.toDataURL('image/jpeg', 0.9);
+  currentQuestions[activeCropQIdx].qImg = croppedDataUrl;
+
+  cropperModal.classList.add('hidden');
+  renderQuestions();
 });
 
 // Compile CBT HTML File
