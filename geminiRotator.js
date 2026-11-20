@@ -73,7 +73,7 @@ class GeminiKeyRotator {
               'Content-Type': 'application/json',
               'Content-Length': Buffer.byteLength(payload)
             },
-            timeout: 25000
+            timeout: 8500
           }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);

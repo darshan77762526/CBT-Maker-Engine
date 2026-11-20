@@ -466,6 +466,19 @@ function generateCbtHtml(config) {
       let unattempted = 0;
       let totalScore = 0;
 
+      function compareAnswers(userVal, officialVal) {
+        if (!userVal || !officialVal) return false;
+        const u = String(userVal).trim();
+        const o = String(officialVal).trim();
+        if (u.toUpperCase() === o.toUpperCase()) return true;
+        const uFloat = parseFloat(u);
+        const oFloat = parseFloat(o);
+        if (!isNaN(uFloat) && !isNaN(oFloat) && Math.abs(uFloat - oFloat) < 0.001) {
+          return true;
+        }
+        return false;
+      }
+
       const reviewCards = QUESTIONS.map(q => {
         const entry = state.answers[q.num];
         const userResp = entry.response;
@@ -477,7 +490,7 @@ function generateCbtHtml(config) {
         if (!userResp) {
           unattempted++;
           statusText = 'Unattempted';
-        } else if (String(userResp).trim().toUpperCase() === String(official).trim().toUpperCase()) {
+        } else if (compareAnswers(userResp, official)) {
           correct++;
           isCorrect = true;
           totalScore += MARKING.correct;

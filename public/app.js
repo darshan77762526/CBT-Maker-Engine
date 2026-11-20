@@ -229,6 +229,90 @@ async function processPdfWithVisualSlices(file) {
   return cleanWatermarks(completeText);
 }
 
+/**
+ * Direct client-side Gemini extraction (Zero serverless timeout, unlimited duration)
+ */
+async function extractWithGeminiDirect(rawText, defaultSubject = 'Physics') {
+  const keys = getStoredKeys().split(/[\n,;]+/).map(k => k.trim()).filter(k => k.length > 5);
+  if (keys.length === 0) return null;
+
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const prompt = `
+You are an expert exam question digitizer for competitive exams (JEE, NEET, CBSE).
+Analyze the following exam paper text and extract all questions into a clean JSON structure.
+
+EXAM TEXT:
+"""
+${rawText.substring(0, 60000)}
+"""
+
+RULES:
+1. Extract ALL questions sequentially (1, 2, 3, ...).
+2. Clean question statement text. Strip watermarks like "DOWNLOAD IIT SCHOOL APP NOW", coaching ads, page numbers.
+3. Keep mathematical expressions and formulas intact.
+4. For MCQs: Provide exactly 4 options in the "options" array. Set "type": "MCQ".
+5. For Numerical/Integer type questions: Set "type": "Numerical", "options": [].
+6. Set "subject" ("${defaultSubject}"), "section" ("Section A" for MCQ, "Section B" for Numerical).
+7. If an Answer Key is present at the end, map the answer for each question into "answer" (e.g. "1", "2", "3", "4" or numerical value).
+8. Flag if the question requires a diagram ("hasDiagram": true/false).
+
+OUTPUT FORMAT:
+Return ONLY valid JSON matching this schema:
+{
+  "subjects": ["Physics"],
+  "questions": [
+    {
+      "num": 1,
+      "subject": "Physics",
+      "section": "Section A",
+      "type": "Numerical",
+      "text": "The current I flowing through the given circuit will be ________ A.",
+      "options": [],
+      "answer": "2",
+      "hasDiagram": true
+    }
+  ]
+}
+`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
+
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.1
+          }
+        })
+      });
+
+      clearTimeout(timeout);
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) continue;
+
+      const parsed = JSON.parse(text);
+      if (parsed.questions && parsed.questions.length > 0) {
+        return parsed;
+      }
+    } catch (e) {
+      clearTimeout(timeout);
+      console.warn(`[ClientGemini] Key #${i+1} attempt failed:`, e.message);
+    }
+  }
+
+  return null;
+}
+
 // Trigger Parsing
 btnParse.addEventListener('click', async () => {
   const formData = new FormData();
@@ -278,19 +362,56 @@ btnParse.addEventListener('click', async () => {
       return;
     }
 
-    const activeKeys = getStoredKeys();
-    const res = await fetch('/api/parse-pdf', {
-      method: 'POST',
-      headers: {
-        'x-gemini-keys': activeKeys.replace(/\n+/g, ',')
-      },
-      body: formData
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to parse');
+    let extractedQuestions = null;
+    let detectedAnswersCount = 0;
+    let subjectsList = [defaultSubj];
 
-    currentQuestions = data.questions || [];
-    currentSubjects = data.stats.subjects || [defaultSubj];
+    // Attempt direct Gemini extraction if text was extracted
+    const textToParse = extractedPaperText || rawTextInput.value.trim();
+    if (textToParse) {
+      btnParse.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>Extracting with Gemini AI...</span>`;
+      try {
+        const directResult = await extractWithGeminiDirect(textToParse, defaultSubj);
+        if (directResult && directResult.questions && directResult.questions.length > 0) {
+          extractedQuestions = directResult.questions.map((q, idx) => ({
+            qid: `QID_${q.num || idx + 1}_${Date.now().toString(36)}`,
+            num: q.num || idx + 1,
+            subject: q.subject || defaultSubj,
+            section: q.section || (q.type === 'Numerical' ? 'Section B' : 'Section A'),
+            type: q.type || 'MCQ',
+            text: q.text || `Question ${q.num || idx + 1}`,
+            options: q.options && q.options.length === 4 ? q.options : (q.type === 'MCQ' ? ['Option 1', 'Option 2', 'Option 3', 'Option 4'] : []),
+            answer: q.answer ? String(q.answer) : '',
+            hasDiagram: !!q.hasDiagram,
+            qImg: ''
+          }));
+          subjectsList = directResult.subjects && directResult.subjects.length > 0 ? directResult.subjects : [defaultSubj];
+          detectedAnswersCount = extractedQuestions.filter(q => q.answer).length;
+        }
+      } catch (err) {
+        console.warn('Direct Gemini attempt fallback to server:', err);
+      }
+    }
+
+    if (!extractedQuestions) {
+      btnParse.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>Structuring Questions &amp; Answers...</span>`;
+      const activeKeys = getStoredKeys();
+      const res = await fetch('/api/parse-pdf', {
+        method: 'POST',
+        headers: {
+          'x-gemini-keys': activeKeys.replace(/\n+/g, ',')
+        },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to parse');
+      extractedQuestions = data.questions || [];
+      subjectsList = data.stats.subjects || [defaultSubj];
+      detectedAnswersCount = data.stats.detectedAnswers;
+    }
+
+    currentQuestions = extractedQuestions || [];
+    currentSubjects = subjectsList;
 
     // Associate auto-cropped visual diagrams (circuits, formulas, figures)
     for (const q of currentQuestions) {
@@ -299,9 +420,9 @@ btnParse.addEventListener('click', async () => {
       }
     }
 
-    document.getElementById('stat-q-count').innerText = data.stats.totalQuestions;
-    document.getElementById('stat-k-count').innerText = data.stats.detectedAnswers;
-    document.getElementById('badge-total-extracted').innerText = `${data.stats.totalQuestions} Questions`;
+    document.getElementById('stat-q-count').innerText = currentQuestions.length;
+    document.getElementById('stat-k-count').innerText = detectedAnswersCount;
+    document.getElementById('badge-total-extracted').innerText = `${currentQuestions.length} Questions`;
 
     configPanel.classList.remove('hidden');
     questionsPanel.classList.remove('hidden');
