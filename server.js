@@ -10,7 +10,20 @@ const PORT = process.env.PORT || 5050;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+
+const publicDir = fs.existsSync(path.join(__dirname, 'public'))
+  ? path.join(__dirname, 'public')
+  : path.join(process.cwd(), 'public');
+
+app.use(express.static(publicDir));
+
+app.get('/', (req, res) => {
+  const file = path.join(publicDir, 'index.html');
+  if (fs.existsSync(file)) {
+    return res.sendFile(file);
+  }
+  return res.status(200).send('CBT Maker Studio Running');
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -148,7 +161,7 @@ app.get('/preview', (req, res) => {
   return res.send(latestGeneratedHtml);
 });
 
-if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`[CBT-Maker-Engine] Studio running at http://localhost:${PORT}`);
   });
