@@ -169,7 +169,7 @@ async function processPdfWithVisualSlices(file) {
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
-    const scale = 1.6; // High DPI for crisp diagram rendering
+    const scale = 2.0; // High DPI for crystal-clear, readable question cards
     const viewport = page.getViewport({ scale });
 
     // Render page to offscreen canvas
@@ -202,13 +202,17 @@ async function processPdfWithVisualSlices(file) {
     // Sort detected questions by canvas Y
     detectedOnPage.sort((a, b) => a.canvasY - b.canvasY);
 
-    // Slice each question box from the canvas
+    // Skip top header and bottom watermark ads
+    const headerCutoff = 100;
+    const footerCutoff = canvas.height - 90;
+
+    // Slice each question box from the canvas sequentially
     for (let i = 0; i < detectedOnPage.length; i++) {
       const cur = detectedOnPage[i];
       const next = detectedOnPage[i + 1];
-      const startY = Math.max(0, cur.canvasY - 12);
-      const endY = next ? Math.min(canvas.height, next.canvasY - 12) : Math.min(canvas.height, startY + 450);
-      const sliceH = Math.max(80, endY - startY);
+      const startY = Math.max(headerCutoff, cur.canvasY - 25);
+      const endY = next ? Math.min(footerCutoff, next.canvasY - 25) : footerCutoff;
+      const sliceH = Math.max(120, endY - startY);
 
       const sliceCanvas = document.createElement('canvas');
       sliceCanvas.width = canvas.width;
@@ -216,7 +220,7 @@ async function processPdfWithVisualSlices(file) {
       const sCtx = sliceCanvas.getContext('2d');
       sCtx.drawImage(canvas, 0, startY, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
 
-      const qImgData = sliceCanvas.toDataURL('image/jpeg', 0.85);
+      const qImgData = sliceCanvas.toDataURL('image/jpeg', 0.90);
       autoCropsMap.set(cur.qNum, {
         dataUrl: qImgData,
         pageNum,
@@ -437,76 +441,75 @@ btnParse.addEventListener('click', async () => {
   }
 });
 
-// Render question cards with diagram preview and inline editing
+// Render question cards with visual question crop and clean options
 function renderQuestions() {
   questionsList.innerHTML = currentQuestions.map((q, idx) => {
     const isMcq = q.type === 'MCQ';
 
     let optionsMarkup = '';
     if (isMcq) {
-      const opts = q.options && q.options.length === 4 ? q.options : ['Option 1', 'Option 2', 'Option 3', 'Option 4'];
+      const opts = q.options && q.options.length === 4 ? q.options : ['Option A', 'Option B', 'Option C', 'Option D'];
       optionsMarkup = `
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-          ${opts.map((optText, oIdx) => {
-            const val = String(oIdx + 1);
-            const isCorrect = String(q.answer) === val;
-            return `
-              <div class="flex items-center gap-2 p-2.5 rounded-xl border ${isCorrect ? 'border-emerald-500 bg-emerald-500/10' : 'border-slate-800 bg-slate-900/60'}">
-                <button type="button" onclick="setQuestionAnswer(${idx}, '${val}')" class="w-7 h-7 rounded-lg text-xs font-bold shrink-0 flex items-center justify-center transition ${isCorrect ? 'bg-emerald-500 text-slate-900 shadow-md' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}" title="Click to set as correct answer">
-                  ${String.fromCharCode(65 + oIdx)}
-                </button>
-                <input type="text" value="${optText.replace(/"/g, '&quot;')}" onchange="updateOptionText(${idx}, ${oIdx}, this.value)" class="flex-1 bg-transparent text-xs text-slate-200 focus:outline-none" placeholder="Option ${String.fromCharCode(65 + oIdx)} text..." />
-              </div>
-            `;
-          }).join('')}
+        <div class="pt-2 space-y-2">
+          <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Official Answer Key &amp; Options:</span>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            ${opts.map((optText, oIdx) => {
+              const val = String(oIdx + 1);
+              const isCorrect = String(q.answer) === val;
+              const letter = String.fromCharCode(65 + oIdx);
+              return `
+                <div class="flex items-center gap-2.5 p-3 rounded-xl border transition ${isCorrect ? 'border-emerald-500 bg-emerald-500/10 shadow-sm' : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'}">
+                  <button type="button" onclick="setQuestionAnswer(${idx}, '${val}')" class="w-8 h-8 rounded-lg text-xs font-extrabold shrink-0 flex items-center justify-center transition cursor-pointer ${isCorrect ? 'bg-emerald-500 text-slate-950 shadow-md ring-2 ring-emerald-400/40' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}" title="Click to mark (${letter}) as correct answer">
+                    (${letter})
+                  </button>
+                  <input type="text" value="${optText.replace(/"/g, '&quot;')}" onchange="updateOptionText(${idx}, ${oIdx}, this.value)" class="flex-1 bg-transparent text-xs text-slate-200 font-medium focus:outline-none" placeholder="Option (${letter}) text..." />
+                  ${isCorrect ? '<span class="text-[10px] font-bold text-emerald-400 uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-500/20">Correct</span>' : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
         </div>
       `;
     } else {
       optionsMarkup = `
-        <div class="pt-2 flex items-center gap-3">
-          <span class="text-xs font-bold text-slate-400">Correct Integer / Numerical Answer:</span>
-          <input type="text" value="${q.answer || ''}" onchange="setQuestionAnswer(${idx}, this.value)" class="w-32 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-emerald-400 font-mono font-bold focus:outline-none focus:border-emerald-500" placeholder="e.g. 25 or -4" />
+        <div class="pt-2 flex flex-wrap items-center gap-3 bg-slate-900/50 p-3 rounded-xl border border-slate-800">
+          <span class="text-xs font-bold text-slate-300">Official Numerical Value Answer:</span>
+          <input type="text" value="${q.answer || ''}" onchange="setQuestionAnswer(${idx}, this.value)" class="w-36 bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-emerald-400 font-mono font-bold focus:outline-none focus:border-emerald-500" placeholder="e.g. 2 or 10" />
+          <span class="text-[11px] text-slate-500 italic">Students enter this via virtual keypad</span>
         </div>
       `;
     }
 
-    // Diagram section
-    let diagramMarkup = '';
+    // Prominent Visual Question Card
+    let cardImageMarkup = '';
     if (q.qImg && q.qImg.trim()) {
-      diagramMarkup = `
-        <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3">
-          <div class="flex items-center gap-3">
-            <img src="${q.qImg}" alt="Question Diagram" class="max-h-24 max-w-xs rounded border border-slate-700 bg-white p-1 object-contain" />
-            <div class="space-y-1">
-              <span class="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                <i class="fa-solid fa-image text-sky-400"></i> Diagram Attached
-              </span>
-              <p class="text-[11px] text-slate-500">Includes circuit / diagram / formulas from PDF</p>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <button type="button" onclick="openCropperModal(${idx})" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition flex items-center gap-1">
-              <i class="fa-solid fa-crop-simple text-sky-400"></i>
-              <span>Re-crop</span>
+      cardImageMarkup = `
+        <div class="bg-white border-2 border-slate-700/80 rounded-2xl p-4 text-center my-3 shadow-md relative group">
+          <img src="${q.qImg}" alt="Question ${q.num}" class="max-h-72 max-w-full mx-auto rounded-lg object-contain" />
+          <div class="pt-2 flex items-center justify-center gap-3 border-t border-slate-100 mt-3">
+            <button type="button" onclick="openCropperModal(${idx})" class="text-xs font-bold text-sky-600 hover:text-sky-700 flex items-center gap-1">
+              <i class="fa-solid fa-crop-simple"></i> Re-crop Card
             </button>
-            <button type="button" onclick="removeQuestionDiagram(${idx})" class="px-2.5 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/30 transition">
-              <i class="fa-solid fa-trash mr-1"></i> Remove
+            <span class="text-slate-300">|</span>
+            <button type="button" onclick="toggleStatementText(${idx})" class="text-xs font-semibold text-slate-500 hover:text-slate-700 flex items-center gap-1">
+              <i class="fa-solid fa-align-left"></i> Edit Text Statement
             </button>
           </div>
         </div>
       `;
     } else {
-      diagramMarkup = `
-        <div class="flex items-center gap-2 pt-1">
-          <button type="button" onclick="openCropperModal(${idx})" class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-semibold transition flex items-center gap-1.5">
-            <i class="fa-solid fa-crop-simple text-sky-400"></i>
-            <span>Crop Diagram from PDF</span>
-          </button>
-          <label class="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer">
-            <i class="fa-solid fa-upload text-emerald-400"></i>
-            <span>Upload Image</span>
-            <input type="file" accept="image/*" class="hidden" onchange="uploadCustomDiagram(${idx}, this)" />
-          </label>
+      cardImageMarkup = `
+        <div class="p-6 border-2 border-dashed border-slate-800 rounded-2xl text-center space-y-2 bg-slate-900/40">
+          <p class="text-xs text-slate-400">No visual card attached for this question yet</p>
+          <div class="flex items-center justify-center gap-2">
+            <button type="button" onclick="openCropperModal(${idx})" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition flex items-center gap-1.5">
+              <i class="fa-solid fa-crop-simple"></i> Crop Question from PDF
+            </button>
+            <label class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer flex items-center gap-1.5">
+              <i class="fa-solid fa-upload"></i> Upload Image
+              <input type="file" accept="image/*" class="hidden" onchange="uploadCustomDiagram(${idx}, this)" />
+            </label>
+          </div>
         </div>
       `;
     }
@@ -515,29 +518,29 @@ function renderQuestions() {
       <div class="bg-slate-950/70 border border-slate-800 rounded-2xl p-5 space-y-3 transition hover:border-slate-700">
         <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
           <div class="flex items-center gap-2.5">
-            <span class="w-7 h-7 rounded-lg bg-sky-600/20 text-sky-400 border border-sky-500/30 flex items-center justify-center font-mono font-bold text-xs">${q.num}</span>
-            <input type="text" value="${q.subject}" onchange="updateQuestionField(${idx}, 'subject', this.value)" class="bg-slate-900 border border-slate-700 rounded-md px-2 py-0.5 text-xs text-slate-300 font-semibold w-28" />
-            <select onchange="updateQuestionField(${idx}, 'section', this.value)" class="bg-slate-900 border border-slate-700 rounded-md px-2 py-0.5 text-xs text-slate-300">
+            <span class="w-8 h-8 rounded-lg bg-sky-600/20 text-sky-400 border border-sky-500/30 flex items-center justify-center font-mono font-extrabold text-xs">Q.${q.num}</span>
+            <input type="text" value="${q.subject}" onchange="updateQuestionField(${idx}, 'subject', this.value)" class="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-300 font-semibold w-28" />
+            <select onchange="updateQuestionField(${idx}, 'section', this.value)" class="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs text-slate-300">
               <option value="Section A" ${q.section === 'Section A' ? 'selected' : ''}>Section A</option>
               <option value="Section B" ${q.section === 'Section B' ? 'selected' : ''}>Section B</option>
             </select>
           </div>
 
           <div class="flex items-center gap-2">
-            <button type="button" onclick="toggleQuestionType(${idx})" class="px-2.5 py-1 rounded-md text-[11px] font-bold border ${isMcq ? 'bg-sky-500/10 border-sky-500/30 text-sky-400' : 'bg-amber-500/10 border-amber-500/30 text-amber-400'}">
+            <button type="button" onclick="toggleQuestionType(${idx})" class="px-3 py-1 rounded-lg text-xs font-bold border transition ${isMcq ? 'bg-sky-500/10 border-sky-500/30 text-sky-400' : 'bg-amber-500/10 border-amber-500/30 text-amber-400'}">
               ${q.type}
             </button>
-            <button type="button" onclick="deleteQuestion(${idx})" class="text-slate-500 hover:text-red-400 text-xs px-2 py-1 rounded">
+            <button type="button" onclick="deleteQuestion(${idx})" class="text-slate-500 hover:text-red-400 text-xs px-2 py-1 rounded transition">
               <i class="fa-solid fa-trash"></i>
             </button>
           </div>
         </div>
 
-        <div>
-          <textarea rows="2" onchange="updateQuestionField(${idx}, 'text', this.value)" class="w-full bg-slate-900/80 border border-slate-800 focus:border-sky-500 rounded-xl p-3 text-xs text-slate-200 focus:outline-none" placeholder="Question statement...">${q.text || ''}</textarea>
-        </div>
+        ${cardImageMarkup}
 
-        ${diagramMarkup}
+        <div id="statement-box-${idx}" class="hidden pt-1">
+          <textarea rows="2" onchange="updateQuestionField(${idx}, 'text', this.value)" class="w-full bg-slate-900/90 border border-slate-800 focus:border-sky-500 rounded-xl p-3 text-xs text-slate-200 focus:outline-none" placeholder="Question statement...">${q.text || ''}</textarea>
+        </div>
 
         ${optionsMarkup}
       </div>
@@ -564,6 +567,11 @@ window.setQuestionAnswer = function(qIdx, val) {
     currentQuestions[qIdx].answer = val;
     renderQuestions();
   }
+};
+
+window.toggleStatementText = function(idx) {
+  const el = document.getElementById(`statement-box-${idx}`);
+  if (el) el.classList.toggle('hidden');
 };
 
 window.toggleQuestionType = function(idx) {

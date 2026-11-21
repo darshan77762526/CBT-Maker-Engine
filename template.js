@@ -396,42 +396,59 @@ function generateCbtHtml(config) {
       document.getElementById('q-number-badge').textContent = \`Question No. \${q.num}\`;
       document.getElementById('q-section-badge').textContent = \`\${q.subject} \u2022 \${q.section}\`;
       document.getElementById('q-id-label').textContent = \`QID: \${q.qid}\`;
-      document.getElementById('q-text-container').innerHTML = q.text || \`Question \${q.num}\`;
 
-      // Render Question Diagram / Image if present
+      const textContainer = document.getElementById('q-text-container');
       const diagramBox = document.getElementById('q-diagram-container');
+
+      // Visual Question Card Presentation (Zero OCR clutter)
       if (q.qImg && q.qImg.trim()) {
         diagramBox.innerHTML = \`
-          <div class="my-3 bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
-            <img src="\${q.qImg}" alt="Question Figure / Diagram" class="max-w-full max-h-[420px] mx-auto rounded-lg object-contain cursor-zoom-in shadow-sm hover:opacity-95 transition" onclick="zoomDiagram('\${q.qImg.replace(/'/g, "\\\\'")}')" />
-            <div class="text-[11px] text-slate-500 font-medium mt-2 flex items-center justify-center gap-1">
+          <div class="my-2 bg-white border-2 border-slate-200 rounded-2xl p-4 sm:p-6 text-center shadow-sm">
+            <img src="\${q.qImg}" alt="Question No. \${q.num}" class="max-w-full max-h-[520px] mx-auto rounded-lg object-contain cursor-zoom-in shadow-sm hover:opacity-95 transition" onclick="zoomDiagram('\${q.qImg.replace(/'/g, "\\\\'")}')" />
+            <div class="text-[11px] text-slate-400 font-medium mt-3 flex items-center justify-center gap-1.5">
               <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"></path></svg>
-              <span>Click diagram to view full size</span>
+              <span>Click question image to view full size</span>
             </div>
           </div>
         \`;
         diagramBox.classList.remove('hidden');
+        if (textContainer) textContainer.classList.add('hidden');
       } else {
         diagramBox.innerHTML = '';
         diagramBox.classList.add('hidden');
+        if (textContainer) {
+          textContainer.innerHTML = q.text || \`Question \${q.num}\`;
+          textContainer.classList.remove('hidden');
+        }
       }
 
       const mcqBox = document.getElementById('mcq-options-container');
       const numBox = document.getElementById('numerical-container');
 
-      if (q.type === 'MCQ' && q.options && q.options.length > 0) {
+      if (q.type === 'MCQ') {
         mcqBox.classList.remove('hidden');
         numBox.classList.add('hidden');
-        mcqBox.innerHTML = q.options.map((opt, oIdx) => {
-          const val = String(oIdx + 1);
-          const isSel = draftResponse === val;
-          return \`
-            <div data-val="\${val}" class="opt-card p-4 rounded-xl border-2 cursor-pointer flex items-center gap-3.5 \${isSel ? 'selected' : 'border-slate-200 bg-white'}">
-              <span class="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs \${isSel ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'}">\${String.fromCharCode(65 + oIdx)}</span>
-              <span class="text-sm font-medium text-slate-800">\${opt}</span>
+
+        const defaultLetters = ['A', 'B', 'C', 'D'];
+        mcqBox.innerHTML = \`
+          <div class="space-y-2.5 pt-1">
+            <span class="text-xs font-bold text-slate-500 uppercase tracking-wider block">Choose Correct Option:</span>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              \${[0, 1, 2, 3].map(oIdx => {
+                const val = String(oIdx + 1);
+                const letter = defaultLetters[oIdx];
+                const optText = q.options && q.options[oIdx] ? q.options[oIdx].trim() : \`Option (\${letter})\`;
+                const isSel = draftResponse === val;
+                return \`
+                  <div data-val="\${val}" class="opt-card p-3.5 sm:p-4 rounded-xl border-2 cursor-pointer flex items-center gap-3.5 transition \${isSel ? 'selected' : 'border-slate-200 bg-white hover:border-sky-300'}">
+                    <span class="w-8 h-8 rounded-full flex items-center justify-center font-extrabold text-xs shrink-0 \${isSel ? 'bg-sky-600 text-white shadow-md' : 'bg-slate-100 text-slate-700'}">(\${letter})</span>
+                    <span class="text-sm font-semibold text-slate-800 flex-1">\${optText}</span>
+                  </div>
+                \`;
+              }).join('')}
             </div>
-          \`;
-        }).join('');
+          </div>
+        \`;
       } else {
         mcqBox.classList.add('hidden');
         numBox.classList.remove('hidden');
